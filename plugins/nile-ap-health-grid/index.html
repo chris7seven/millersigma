@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Access Point Health Grid — Nile Sigma Plugin</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,Arial,sans-serif;
+       background:transparent;color:#072F68;overflow:hidden}
+  #wrap{height:100%;width:100%;display:flex;flex-direction:column;padding:10px 14px;gap:6px}
+  #top{display:flex;justify-content:space-between;align-items:baseline;flex:0 0 auto}
+  #ttl{font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#FF6600}
+  #meta{font-size:11px;color:#5B6B7F}
+  #meta b{color:#072F68}
+  #stage{flex:1;min-height:0;overflow-y:auto}
+  #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(58px,1fr));gap:5px;padding-right:2px}
+  .cell{border-radius:6px;padding:5px 4px;display:flex;flex-direction:column;
+        justify-content:center;align-items:center;gap:1px;cursor:default;
+        border:1px solid rgba(0,0,0,.06);min-height:44px}
+  .cell .ap{font-size:9px;font-weight:700;color:rgba(0,0,0,.55)}
+  .cell .cl{font-size:12px;font-weight:800}
+  .healthy{background:#E4F7EE}
+  .healthy .cl{color:#0C7A46}
+  .degraded{background:#FFF3D6}
+  .degraded .cl{color:#8A5A00}
+  .offline{background:#FBE4E6}
+  .offline .cl{color:#A3132C}
+  #legend{flex:0 0 auto;display:flex;align-items:center;gap:14px;font-size:10px;color:#5B6B7F}
+  .sw{display:inline-block;width:10px;height:10px;border-radius:3px;vertical-align:-1px;margin-right:5px}
+  #tip{position:fixed;pointer-events:none;background:#072F68;border:1px solid #2070E1;
+       border-radius:8px;padding:8px 10px;font-size:11px;color:#EAF2FB;opacity:0;
+       transition:opacity .1s;z-index:10;white-space:nowrap;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  #tip b{color:#8FC0F0}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="top">
+    <div id="ttl">Access point health grid</div>
+    <div id="meta">APs online <b id="ok">—</b> · avg signal <b id="sig">—</b></div>
+  </div>
+  <div id="stage"><div id="grid"></div></div>
+  <div id="legend">
+    <span><i class="sw" style="background:#0C7A46"></i>healthy</span>
+    <span><i class="sw" style="background:#8A5A00"></i>degraded</span>
+    <span><i class="sw" style="background:#A3132C"></i>offline</span>
+  </div>
+</div>
+<div id="tip"></div>
+<script>
+(function(){
+  var client=(window.sigmaComputing&&window.sigmaComputing.plugin&&window.sigmaComputing.plugin.client)||null;
+
+  var defs=[
+    {name:'source',type:'element'},
+    {name:'site',type:'column',source:'source',label:'Site'},
+    {name:'ap',type:'column',source:'source',label:'Access point'},
+    {name:'status',type:'column',source:'source',label:'Status'},
+    {name:'clients',type:'column',source:'source',allowedTypes:['number','integer'],label:'Clients'},
+    {name:'signal',type:'column',source:'source',allowedTypes:['number','integer'],label:'Signal'}
+  ];
+  if(client) client.config.configureEditorPanel(defs);
+
+  var tip=document.getElementById('tip');
+  function bind(node,html){
+    node.addEventListener('mousemove',function(e){
+      tip.innerHTML=html; tip.style.opacity=1;
+      tip.style.left=Math.min(window.innerWidth-tip.offsetWidth-10,e.clientX+14)+'px';
+      tip.style.top=Math.max(8,e.clientY-tip.offsetHeight-12)+'px';
+    });
+    node.addEventListener('mouseleave',function(){tip.style.opacity=0;});
+  }
+  function num(v){return (Math.round(Number(v)||0)).toLocaleString();}
+  function cls(status){
+    var s=String(status||'').toLowerCase();
+    if(s.indexOf('degrad')>=0) return 'degraded';
+    if(s.indexOf('off')>=0) return 'offline';
+    return 'healthy';
+  }
+
+  function draw(rows){
+    var grid=document.getElementById('grid');
+    while(grid.firstChild) grid.removeChild(grid.firstChild);
+
+    var okCount=0, sigTot=0, sigN=0;
+    rows.forEach(function(r){
+      var c=cls(r.status);
+      if(c!=='offline') okCount++;
+      if(r.signal>0){ sigTot+=r.signal; sigN++; }
+
+      var cell=document.createElement('div');
+      cell.className='cell '+c;
+      var ap=document.createElement('div'); ap.className='ap'; ap.textContent=r.ap;
+      var cl=document.createElement('div'); cl.className='cl';
+      cl.textContent = c==='offline' ? 'OFF' : num(r.clients);
+      cell.appendChild(ap); cell.appendChild(cl);
+      bind(cell, '<b>'+r.ap+'</b><br>'+r.site+'<br>'+r.status+
+                 ' · '+num(r.clients)+' clients<br>signal '+num(r.signal)+'%');
+      grid.appendChild(cell);
+    });
+
+    document.getElementById('ok').textContent=okCount+' / '+rows.length;
+    document.getElementById('sig').textContent=(sigN?Math.round(sigTot/sigN):0)+'%';
+  }
+
+  function synth(){
+    var sites=['State University — Main Campus','Regional Medical Center',
+               'Lincoln Elementary School','Meridian Manufacturing Plant',
+               'Harborview Outlet Mall','County Administration Building'];
+    var out=[]; var n=1;
+    sites.forEach(function(site){
+      for(var i=0;i<6;i++){
+        var roll=Math.random();
+        var status = roll<0.72 ? 'Healthy' : (roll<0.90 ? 'Degraded' : 'Offline');
+        var clients = status==='Offline' ? 0 : Math.round(15+Math.random()*55);
+        var signal = status==='Offline' ? 0 : (status==='Degraded' ? Math.round(60+Math.random()*15)
+                                                                    : Math.round(88+Math.random()*11));
+        out.push({site:site, ap:'AP-'+(100*(sites.indexOf(site)+1)+i+1), status:status,
+                  clients:clients, signal:signal});
+        n++;
+      }
+    });
+    return out;
+  }
+
+  var S={cfg:{},data:null,unsub:null};
+  function recompute(){
+    var c=S.cfg||{}, d=S.data, rows=null;
+    if(d&&c.ap&&d[c.ap]){
+      var ss=d[c.site]||[], aa=d[c.ap]||[], tt=d[c.status]||[],
+          cc=d[c.clients]||[], gg=d[c.signal]||[];
+      rows=[];
+      for(var i=0;i<aa.length;i++){
+        rows.push({site:String(ss[i]||''), ap:String(aa[i]||''),
+                   status:String(tt[i]||'Healthy'), clients:Number(cc[i])||0,
+                   signal:Number(gg[i])||0});
+      }
+      if(!rows.length) rows=null;
+    }
+    draw(rows||synth());
+  }
+
+  if(client){
+    client.config.subscribe(function(cfg){
+      S.cfg=cfg||{};
+      if(S.unsub){S.unsub();S.unsub=null;}
+      if(cfg&&cfg.source){
+        S.unsub=client.elements.subscribeToElementData(cfg.source,function(dd){S.data=dd;recompute();});
+      }
+      recompute();
+    });
+  } else { recompute(); }
+
+  // ResizeObserver, not window resize -- Sigma resizes the element, not the page.
+  // No animation loop, so headless PNG export can reach idle.
+  if(window.ResizeObserver){
+    new ResizeObserver(function(){}).observe(document.getElementById('stage'));
+  }
+})();
+</script>
+</body>
+</html>

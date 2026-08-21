@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Zero-Trust Enforcement Ticker — Nile Sigma Plugin</title>
+<script src="https://unpkg.com/@sigmacomputing/plugin"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,Arial,sans-serif;
+       background:transparent;overflow:hidden}
+  #wrap{height:100%;width:100%;display:flex;align-items:center;gap:10px;padding:0 14px}
+  #dot{flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:#00C48C;
+       box-shadow:0 0 0 3px rgba(0,196,140,.22)}
+  #tag{flex:0 0 auto;font-size:11px;font-weight:800;letter-spacing:.06em;
+       text-transform:uppercase;color:#FF6600}
+  #msgWrap{flex:1;min-width:0;position:relative;height:100%;overflow:hidden}
+  .msg{position:absolute;left:0;top:0;height:100%;width:100%;display:flex;
+       align-items:center;font-size:12.5px;color:#EAF2FB;white-space:nowrap;
+       overflow:hidden;text-overflow:ellipsis;opacity:0;
+       transform:translateY(6px);
+       transition:opacity .45s ease, transform .45s ease}
+  .msg.show{opacity:1;transform:translateY(0)}
+  .msg b{color:#8FC0F0;margin-right:6px}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="dot"></div>
+  <div id="tag">Live</div>
+  <div id="msgWrap"></div>
+</div>
+<script>
+(function(){
+  var client=(window.sigmaComputing&&window.sigmaComputing.plugin&&window.sigmaComputing.plugin.client)||null;
+  if(client) client.config.configureEditorPanel([
+    {name:'intervalMs', type:'text', label:'Rotation interval (ms)', defaultValue:'4200'}
+  ]);
+
+  // No external CORS fetch -- a canned list of representative zero-trust
+  // enforcement / NOC events, cycled on a timer. This is what a real security
+  // event feed would look like; there's no live telemetry source wired up.
+  function synth(){
+    return [
+      '247 devices authenticated via 802.1X in the last hour',
+      '3 non-compliant endpoints quarantined — posture check failed',
+      'SLA: 99.97% Wi-Fi uptime, trailing 24h across managed sites',
+      '18 new access points auto-provisioned via zero-touch onboarding',
+      '1 unauthorized MAC address blocked at Regional Medical Center',
+      'Firmware 4.2 zero-trust policy sync complete on 1,204 APs',
+      '92 IoT devices re-segmented into the guest VLAN automatically',
+      'Micro-segmentation policy updated — 6 manufacturing OT zones',
+      '0 SLA breaches detected in the last rolling 4-hour window',
+      '412 guest sessions issued time-boxed captive-portal access'
+    ];
+  }
+
+  var S={idx:0,msgs:synth(),timer:null,nodeA:null,nodeB:null,active:null};
+
+  function makeNode(text){
+    var d=document.createElement('div');
+    d.className='msg';
+    d.innerHTML='<b>&#8226;</b>'+text;
+    return d;
+  }
+
+  function showNext(){
+    var wrap=document.getElementById('msgWrap');
+    var text=S.msgs[S.idx % S.msgs.length];
+    S.idx++;
+    var incoming=makeNode(text);
+    wrap.appendChild(incoming);
+    // settle to visible on next frame (CSS transition, not a JS animation loop)
+    window.requestAnimationFrame(function(){ incoming.classList.add('show'); });
+
+    var outgoing=S.active;
+    S.active=incoming;
+    if(outgoing){
+      outgoing.classList.remove('show');
+      window.setTimeout(function(){
+        if(outgoing.parentNode) outgoing.parentNode.removeChild(outgoing);
+      }, 500);
+    }
+  }
+
+  function start(intervalMs){
+    if(S.timer) window.clearInterval(S.timer);
+    showNext();
+    S.timer=window.setInterval(showNext, Math.max(1500, Number(intervalMs)||4200));
+  }
+
+  if(client){
+    client.config.subscribe(function(cfg){
+      start(cfg && cfg.intervalMs);
+    });
+  } else {
+    start(4200);
+  }
+
+  // ResizeObserver, not window resize -- no layout math depends on size here,
+  // but keep the convention consistent with the other plugins in this family.
+  if(window.ResizeObserver){
+    new ResizeObserver(function(){}).observe(document.getElementById('wrap'));
+  }
+})();
+</script>
+</body>
+</html>
