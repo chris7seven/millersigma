@@ -71,16 +71,21 @@
     S.idx++;
     var incoming=makeNode(text);
     wrap.appendChild(incoming);
-    // settle to visible on next frame (CSS transition, not a JS animation loop)
-    window.requestAnimationFrame(function(){ incoming.classList.add('show'); });
 
     var outgoing=S.active;
     S.active=incoming;
     if(outgoing){
+      // Only fade when swapping an existing message -- the very first
+      // message renders fully opaque immediately so a headless PNG export
+      // that captures before a transition settles never catches it mid-fade.
+      window.requestAnimationFrame(function(){ incoming.classList.add('show'); });
       outgoing.classList.remove('show');
       window.setTimeout(function(){
         if(outgoing.parentNode) outgoing.parentNode.removeChild(outgoing);
       }, 500);
+    } else {
+      incoming.classList.add('show');
+      incoming.style.transition = 'none';
     }
   }
 
