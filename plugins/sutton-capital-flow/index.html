@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Capital Allocation Flow — Sigma Plugin</title>
+<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@sigmacomputing/plugin@1.2.0/dist/umd/sigmacomputing-plugin.umd.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,Arial,sans-serif;background:transparent;color:#0F2238;overflow:hidden}
+  #wrap{height:100%;width:100%;display:flex;flex-direction:column;padding:10px 14px}
+  #hdr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
+  #hdr .t{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#8A94A0}
+  #hdr .v{font-size:13px;font-weight:800;color:#0F2238}
+  #stage{flex:1;position:relative}
+  svg{width:100%;height:100%;display:block}
+  .node-label{font-size:11px;font-weight:700;fill:#0F2238}
+  .node-sub{font-size:9px;fill:#7C8798}
+  .node-rect{fill:#FFFFFF;stroke:#DCE1E6;stroke-width:1}
+  #empty{font-size:12px;color:#8A94A0;display:flex;align-items:center;justify-content:center;height:100%}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+(function(){
+  var SDK = window.SigmaPlugin || (window.sigmaComputing && window.sigmaComputing.plugin) || window["@sigmacomputing/plugin"];
+  if(!SDK || !SDK.client || !window.React || !window.ReactDOM){
+    document.getElementById('root').innerHTML = '<div id="wrap"><div id="empty">Plugin SDK failed to load. Reload the workbook; if it persists, check the plugin URL is publicly accessible.</div></div>';
+    return;
+  }
+  var h = React.createElement;
+
+  var defs=[
+    {name:'source', type:'element'},
+    {name:'segment', type:'column', source:'source', label:'Client segment'},
+    {name:'strategy', type:'column', source:'source', label:'Strategy'},
+    {name:'aum', type:'column', source:'source', allowedTypes:['number','integer'], label:'Allocated AUM'},
+    {name:'title', type:'text', label:'Header title', defaultValue:'CAPITAL ALLOCATION FLOW'},
+    {name:'clickTarget', type:'variable', label:'Click strategy → variable (optional)'},
+    {name:'onSelect', type:'action-trigger', label:'Click strategy → action (optional)'}
+  ];
+  SDK.client.config.configureEditorPanel(defs);
+
+  var PALETTE = ['#B08D46','#4C9A8C','#0F2238','#D4AF37','#3B5166','#8FA6B8'];
+
+  function fmt(v){
+    if(v==null||isNaN(v)) return '$0';
+    var n=Number(v), a=Math.abs(n), s;
+    if(a>=1000) s=(a/1000).toFixed(2)+'B';
+    else s=a.toFixed(0)+'M';
+    return '$'+s;
+  }
+
+  function synth(){
+    var segs=['HNW Individuals & Families','Foundations & Endowments','Trusts','Retirement Plans'];
+    var strats=['HNW Growth Equity','Income & Value','Institutional & Endowment Portfolios','Retirement Plan Services','Tactical Global Equity'];
+    var w=[[420,80,20,20,80],[10,40,300,10,20],[60,90,70,10,40],[0,0,0,250,0]];
+    var rows=[];
+    for(var i=0;i<segs.length;i++){
+      for(var j=0;j<strats.length;j++){
+        if(w[i][j]>0) rows.push({segment:segs[i], strategy:strats[j], aum:w[i][j]});
+      }
+    }
+    return rows;
+  }
+
+  function buildGraph(rows){
+    var segOrder=[], stratOrder=[];
+    rows.forEach(function(r){
+      if(segOrder.indexOf(r.segment)<0) segOrder.push(r.segment);
+      if(stratOrder.indexOf(r.strategy)<0) stratOrder.push(r.strategy);
+    });
+    var segTotal={}, stratTotal={};
+    rows.forEach(function(r){
+      segTotal[r.segment]=(segTotal[r.segment]||0)+Number(r.aum||0);
+      stratTotal[r.strategy]=(stratTotal[r.strategy]||0)+Number(r.aum||0);
+    });
+    return {segOrder:segOrder, stratOrder:stratOrder, segTotal:segTotal, stratTotal:stratTotal};
+  }
+
+  function App(){
+    var config = SDK.useConfig();
+    var raw = SDK.useElementData(config.source || '');
+    var varTuple = SDK.useVariable(config.clickTarget || '');
+    var setSelected = varTuple[1];
+    var triggerOnSelect = SDK.useActionTrigger(config.onSelect || '');
+
+    var rows;
+    if(raw && config.segment && config.strategy && config.aum &&
+       raw[config.segment] && raw[config.segment].length){
+      rows=[];
+      for(var i=0;i<raw[config.segment].length;i++){
+        rows.push({segment:raw[config.segment][i], strategy:raw[config.strategy][i], aum:raw[config.aum][i]});
+      }
+    } else {
+      rows = synth();
+    }
+
+    var g = buildGraph(rows);
+    var W=760, H=360, colW=210, leftX=20, rightX=W-20-colW;
+    var gap=10;
+    var segH = (H-40-gap*(g.segOrder.length-1))/g.segOrder.length;
+    var stratH = (H-40-gap*(g.stratOrder.length-1))/g.stratOrder.length;
+
+    var segY={}, y=20;
+    g.segOrder.forEach(function(s){ segY[s]=y; y+=segH+gap; });
+    var stratY={}; y=20;
+    g.stratOrder.forEach(function(s){ stratY[s]=y; y+=stratH+gap; });
+
+    var grandTotal = Object.keys(g.segTotal).reduce(function(a,k){return a+g.segTotal[k];},0);
+
+    var ribbons = rows.map(function(r, idx){
+      var sy = segY[r.segment] + segH/2;
+      var ty = stratY[r.strategy] + stratH/2;
+      var x1 = leftX+colW, x2 = rightX;
+      var mid = (x1+x2)/2;
+      var strokeW = Math.max(1.5, (Number(r.aum||0)/grandTotal)*220);
+      var color = PALETTE[g.stratOrder.indexOf(r.strategy) % PALETTE.length];
+      var d = 'M'+x1+','+sy+' C'+mid+','+sy+' '+mid+','+ty+' '+x2+','+ty;
+      return h('path', {
+        key:'rb'+idx, d:d, fill:'none', stroke:color, strokeOpacity:0.38,
+        strokeWidth:strokeW, strokeLinecap:'round',
+        style:{cursor:'pointer'},
+        onClick:function(){
+          if(config.clickTarget) setSelected([r.strategy]);
+          if(config.onSelect) triggerOnSelect({strategy:r.strategy});
+        }
+      });
+    });
+
+    var segNodes = g.segOrder.map(function(s, i){
+      var yy=segY[s];
+      return h('g', {key:'sg'+i},
+        h('rect', {className:'node-rect', x:leftX, y:yy, width:colW, height:segH, rx:8}),
+        h('text', {className:'node-label', x:leftX+10, y:yy+18}, s),
+        h('text', {className:'node-sub', x:leftX+10, y:yy+34}, fmt(g.segTotal[s])+' AUM')
+      );
+    });
+
+    var stratNodes = g.stratOrder.map(function(s, i){
+      var yy=stratY[s];
+      var color = PALETTE[i % PALETTE.length];
+      return h('g', {key:'st'+i, style:{cursor:'pointer'}, onClick:function(){
+          if(config.clickTarget) setSelected([s]);
+          if(config.onSelect) triggerOnSelect({strategy:s});
+        }},
+        h('rect', {className:'node-rect', x:rightX, y:yy, width:colW, height:stratH, rx:8,
+                    style:{stroke:color, strokeWidth:1.6}}),
+        h('rect', {x:rightX, y:yy, width:4, height:stratH, fill:color, rx:2}),
+        h('text', {className:'node-label', x:rightX+14, y:yy+18}, s),
+        h('text', {className:'node-sub', x:rightX+14, y:yy+34}, fmt(g.stratTotal[s])+' AUM')
+      );
+    });
+
+    return h('div', {id:'wrap'},
+      h('div', {id:'hdr'},
+        h('div', {className:'t'}, config.title || 'CAPITAL ALLOCATION FLOW'),
+        h('div', {className:'v'}, fmt(grandTotal)+' total AUM')
+      ),
+      h('div', {id:'stage'},
+        h('svg', {viewBox:'0 0 '+W+' '+H, preserveAspectRatio:'xMidYMid meet'},
+          ribbons, segNodes, stratNodes
+        )
+      )
+    );
+  }
+
+  ReactDOM.render(h(App), document.getElementById('root'));
+})();
+</script>
+</body>
+</html>
