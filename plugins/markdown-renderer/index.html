@@ -229,23 +229,26 @@
 
   if (!client) return;
 
+  // Shapes here follow the SDK's own index.d.ts, NOT the skill docs: `values` on
+  // dropdown/radio is string[] (numbers crash Sigma's panel renderer), `defaultValue`
+  // is a string, and there is no `description` property on any entry type.
   client.config.configureEditorPanel([
-    { name: "mdVariable", type: "variable", allowedTypes: ["text"],
-      label: "Markdown Text Control", description: "A workbook text control holding the markdown to render. Takes precedence over the column source below." },
+    { name: "mdVariable", type: "variable", allowedTypes: ["text"], label: "Markdown Text Control" },
     { name: "source", type: "element", label: "Fallback Source Element" },
     { name: "mdColumn", type: "column", source: "source", allowMultiple: false,
-      allowedTypes: ["text", "variant"], label: "Markdown Column",
-      description: "Used when no text control is bound. Renders the first row's value." },
-    { name: "joinRows", type: "checkbox", label: "Concatenate all rows",
-      description: "Join every row of the markdown column into one document instead of rendering only the first row." },
+      allowedTypes: ["text"], label: "Markdown Column (first row)" },
+    { name: "joinRows", type: "checkbox", label: "Concatenate all rows" },
     { name: "theme", type: "dropdown", values: ["Light", "Dark", "Transparent"], defaultValue: "Light", label: "Theme" },
     { name: "accent", type: "color", label: "Accent Color" },
-    { name: "fontSize", type: "dropdown", values: [13, 14, 15, 16, 18, 20], defaultValue: 15, label: "Base Font Size" },
+    { name: "fontSize", type: "dropdown", values: ["13", "14", "15", "16", "18", "20"], defaultValue: "15", label: "Base Font Size" },
     { name: "contentWidth", type: "dropdown", values: ["Full width", "Narrow (640px)", "Medium (760px)", "Wide (960px)"], defaultValue: "Full width", label: "Content Width" },
     { name: "padding", type: "dropdown", values: ["None", "Compact", "Comfortable", "Spacious"], defaultValue: "Comfortable", label: "Padding" },
-    { name: "textAlign", type: "radio", values: ["Left", "Center"], singleLine: true, defaultValue: "Left",
-      label: "Content Alignment", description: "Centers the content block when a fixed content width is set." }
+    { name: "textAlign", type: "radio", values: ["Left", "Center"], singleLine: true, defaultValue: "Left", label: "Content Alignment" }
   ]);
+
+  // Variable helpers are nested under .config in every shipped SDK build; fall back to
+  // the top level only in case a future build promotes them.
+  var varApi = (typeof client.config.getVariable === "function") ? client.config : client;
 
   var unsubData = null;
   var unsubVar = null;
@@ -279,20 +282,20 @@
       state.varText = "";
       if (cfg.mdVariable) {
         try {
-          unsubVar = client.subscribeToWorkbookVariable(cfg.mdVariable, function (val) {
+          unsubVar = varApi.subscribeToWorkbookVariable(cfg.mdVariable, function (val) {
             state.varText = coerceText(val);
             paint();
           });
-        } catch (e) {}
+        } catch (e) { console.warn("[markdown-renderer] variable subscribe failed:", e); }
         // Seed from the current snapshot in case the subscription only fires on change.
         try {
-          var snap = client.getVariable(cfg.mdVariable);
+          var snap = varApi.getVariable(cfg.mdVariable);
           if (snap && typeof snap.then === "function") {
             snap.then(function (v) { if (!state.varText) { state.varText = coerceText(v); paint(); } });
           } else if (snap !== undefined) {
             state.varText = coerceText(snap);
           }
-        } catch (e) {}
+        } catch (e) { console.warn("[markdown-renderer] getVariable failed:", e); }
       }
     }
 
