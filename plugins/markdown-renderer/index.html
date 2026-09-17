@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Markdown Renderer</title>
+<!-- The SDK's UMD build needs React on the global before it will populate
+     window.SigmaPlugin; pinned versions, loaded in order. -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@sigmacomputing/plugin@1.2.0/dist/umd/sigmacomputing-plugin.umd.js"></script>
+<script src="./marked.min.js"></script>
+<script src="./purify.min.js"></script>
+<style>
+  :root {
+    --md-fg: #1f2733;
+    --md-muted: #667085;
+    --md-bg: #ffffff;
+    --md-accent: #2563eb;
+    --md-rule: #e4e7ec;
+    --md-code-bg: #f4f6f8;
+    --md-quote-bg: #f8fafc;
+    --md-size: 15px;
+    --md-pad: 20px;
+    --md-maxw: 100%;
+  }
+  html, body { margin: 0; padding: 0; height: 100%; }
+  body {
+    background: var(--md-bg);
+    color: var(--md-fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: var(--md-size);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  #scroll { height: 100%; overflow: auto; box-sizing: border-box; padding: var(--md-pad); }
+  #md { max-width: var(--md-maxw); margin: 0 auto; }
+  #md.align-left { margin: 0; }
+
+  /* --- typography --- */
+  #md > :first-child { margin-top: 0; }
+  #md > :last-child { margin-bottom: 0; }
+  #md h1, #md h2, #md h3, #md h4, #md h5, #md h6 {
+    font-weight: 650; line-height: 1.25; margin: 1.5em 0 0.5em; letter-spacing: -0.01em;
+  }
+  #md h1 { font-size: 1.85em; }
+  #md h2 { font-size: 1.45em; padding-bottom: 0.3em; border-bottom: 1px solid var(--md-rule); }
+  #md h3 { font-size: 1.2em; }
+  #md h4 { font-size: 1.05em; }
+  #md h5, #md h6 { font-size: 0.95em; color: var(--md-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  #md p { margin: 0 0 0.9em; }
+  #md a { color: var(--md-accent); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--md-accent) 35%, transparent); }
+  #md a:hover { border-bottom-color: var(--md-accent); }
+  #md strong { font-weight: 650; }
+  #md em { font-style: italic; }
+  #md del { color: var(--md-muted); }
+  #md hr { border: 0; border-top: 1px solid var(--md-rule); margin: 1.6em 0; }
+  #md img { max-width: 100%; border-radius: 6px; }
+
+  /* --- lists --- */
+  #md ul, #md ol { margin: 0 0 0.9em; padding-left: 1.35em; }
+  #md li { margin: 0.25em 0; }
+  #md li > ul, #md li > ol { margin-bottom: 0.2em; }
+  #md li::marker { color: var(--md-muted); }
+  /* marked emits task items as a bare <li> containing a checkbox, no class. */
+  #md li.task-list-item,
+  #md li:has(> input[type="checkbox"]) { list-style: none; margin-left: -1.25em; }
+  #md li input[type="checkbox"] {
+    margin-right: 0.5em; accent-color: var(--md-accent); vertical-align: -0.08em;
+  }
+
+  /* --- code --- */
+  #md code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.875em; background: var(--md-code-bg); padding: 0.15em 0.4em;
+    border-radius: 4px; border: 1px solid var(--md-rule);
+  }
+  #md pre {
+    background: var(--md-code-bg); border: 1px solid var(--md-rule); border-radius: 8px;
+    padding: 12px 14px; overflow: auto; margin: 0 0 1em; line-height: 1.5;
+  }
+  #md pre code { background: none; border: 0; padding: 0; font-size: 0.85em; }
+
+  /* --- quote --- */
+  #md blockquote {
+    margin: 0 0 1em; padding: 0.6em 0.9em; color: var(--md-muted);
+    background: var(--md-quote-bg); border-left: 3px solid var(--md-accent); border-radius: 0 6px 6px 0;
+  }
+  #md blockquote > :last-child { margin-bottom: 0; }
+
+  /* --- tables --- */
+  #md table { border-collapse: collapse; width: 100%; margin: 0 0 1em; font-size: 0.94em; }
+  #md th, #md td { padding: 7px 10px; border-bottom: 1px solid var(--md-rule); text-align: left; }
+  /* Honour markdown column alignment (`| ---: |`), which marked emits as align=. */
+  #md th[align="right"], #md td[align="right"] { text-align: right; }
+  #md th[align="center"], #md td[align="center"] { text-align: center; }
+  #md th {
+    font-weight: 600; font-size: 0.82em; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--md-muted); border-bottom: 1px solid var(--md-fg); white-space: nowrap;
+  }
+  #md tbody tr:last-child td { border-bottom: 0; }
+
+  /* --- empty / hint state --- */
+  .hint {
+    display: flex; height: 100%; align-items: center; justify-content: center;
+    text-align: center; color: var(--md-muted); font-size: 13px; padding: 24px; box-sizing: border-box;
+  }
+  .hint code { font-size: 0.9em; }
+</style>
+</head>
+<body>
+<div id="scroll"><div id="md"></div></div>
+<script>
+(function () {
+  "use strict";
+
+  // The SDK exposes itself under different globals depending on build.
+  var sdk = window.SigmaPlugin || (window.sigmaComputing && window.sigmaComputing.plugin) || window.sigmaPlugin;
+  var client = sdk && sdk.client;
+  if (!client || !client.config || typeof client.config.configureEditorPanel !== "function") client = null;
+
+  var mdEl = document.getElementById("md");
+  var scrollEl = document.getElementById("scroll");
+
+  marked.use({ gfm: true, breaks: false });
+
+  var SAMPLE = [
+    "# Markdown Renderer",
+    "",
+    "Bind a **text control** (or a text column) in the editor panel and its",
+    "contents render here as formatted markdown.",
+    "",
+    "## What it supports",
+    "",
+    "- Headings, **bold**, *italic*, ~~strikethrough~~, `inline code`",
+    "- Lists, nested lists, and task lists",
+    "- Tables, block quotes, links and images",
+    "",
+    "| Feature | Status |",
+    "| --- | --- |",
+    "| GFM tables | Supported |",
+    "| Task lists | Supported |",
+    "| Fenced code | Supported |",
+    "",
+    "> Quotes are styled with the accent colour from the editor panel.",
+    "",
+    "```sql",
+    "select feature, status from plugin_capabilities;",
+    "```"
+  ].join("\n");
+
+  var DEFAULTS = {
+    theme: "Light",
+    accent: "#2563eb",
+    fontSize: 15,
+    contentWidth: "Full width",
+    padding: "Comfortable",
+    textAlign: "Left",
+    joinRows: false
+  };
+
+  var PADS = { "None": 0, "Compact": 12, "Comfortable": 20, "Spacious": 32 };
+  var WIDTHS = { "Full width": "100%", "Narrow (640px)": "640px", "Medium (760px)": "760px", "Wide (960px)": "960px" };
+
+  var THEMES = {
+    Light: { fg: "#1f2733", muted: "#667085", bg: "#ffffff", rule: "#e4e7ec", code: "#f4f6f8", quote: "#f8fafc" },
+    Dark:  { fg: "#e6e9ef", muted: "#98a2b3", bg: "#151a22", rule: "#2b3341", code: "#1d232d", quote: "#1b212a" },
+    Transparent: { fg: "#1f2733", muted: "#667085", bg: "transparent", rule: "#e4e7ec", code: "rgba(0,0,0,0.04)", quote: "rgba(0,0,0,0.03)" }
+  };
+
+  function num(v, fallback) {
+    var n = typeof v === "number" ? v : parseFloat(v);
+    return isFinite(n) ? n : fallback;
+  }
+
+  function applyStyle(cfg) {
+    var theme = THEMES[cfg.theme] || THEMES.Light;
+    var root = document.documentElement.style;
+    root.setProperty("--md-fg", theme.fg);
+    root.setProperty("--md-muted", theme.muted);
+    root.setProperty("--md-bg", theme.bg);
+    root.setProperty("--md-rule", theme.rule);
+    root.setProperty("--md-code-bg", theme.code);
+    root.setProperty("--md-quote-bg", theme.quote);
+    root.setProperty("--md-accent", cfg.accent || DEFAULTS.accent);
+    root.setProperty("--md-size", num(cfg.fontSize, DEFAULTS.fontSize) + "px");
+    root.setProperty("--md-pad", num(PADS[cfg.padding], PADS.Comfortable) + "px");
+    root.setProperty("--md-maxw", WIDTHS[cfg.contentWidth] || "100%");
+    // "Center" leaves the default `margin: 0 auto` in place; "Left" pins it flush.
+    mdEl.className = cfg.textAlign === "Center" ? "" : "align-left";
+  }
+
+  // Sigma hands variable values back in several shapes; flatten to text.
+  function coerceText(v) {
+    if (v === null || v === undefined) return "";
+    if (typeof v === "string") return v;
+    if (typeof v === "number" || typeof v === "boolean") return String(v);
+    if (Array.isArray(v)) return v.map(coerceText).filter(Boolean).join("\n");
+    if (typeof v === "object") {
+      if ("value" in v) return coerceText(v.value);
+      if ("defaultValue" in v) return coerceText(v.defaultValue);
+      if ("values" in v) return coerceText(v.values);
+      if ("text" in v) return coerceText(v.text);
+    }
+    return "";
+  }
+
+  function renderMarkdown(src) {
+    var html = marked.parse(src || "");
+    // Markdown text is author-supplied but may contain raw HTML — sanitize before injecting.
+    mdEl.innerHTML = DOMPurify.sanitize(html, { ADD_ATTR: ["target"] });
+    // Open any links in a new tab; the plugin lives in an iframe.
+    var links = mdEl.querySelectorAll("a[href]");
+    for (var i = 0; i < links.length; i++) {
+      links[i].setAttribute("target", "_blank");
+      links[i].setAttribute("rel", "noopener noreferrer");
+    }
+    scrollEl.scrollTop = 0;
+  }
+
+  function renderHint(msg) {
+    mdEl.innerHTML = '<div class="hint">' + msg + "</div>";
+  }
+
+  // Paint before touching the SDK: Sigma takes a beat to push config, and outside
+  // Sigma (local preview) the config subscription never fires at all.
+  applyStyle(DEFAULTS);
+  renderMarkdown(SAMPLE);
+
+  if (!client) return;
+
+  client.config.configureEditorPanel([
+    { name: "mdVariable", type: "variable", allowedTypes: ["text"],
+      label: "Markdown Text Control", description: "A workbook text control holding the markdown to render. Takes precedence over the column source below." },
+    { name: "source", type: "element", label: "Fallback Source Element" },
+    { name: "mdColumn", type: "column", source: "source", allowMultiple: false,
+      allowedTypes: ["text", "variant"], label: "Markdown Column",
+      description: "Used when no text control is bound. Renders the first row's value." },
+    { name: "joinRows", type: "checkbox", label: "Concatenate all rows",
+      description: "Join every row of the markdown column into one document instead of rendering only the first row." },
+    { name: "theme", type: "dropdown", values: ["Light", "Dark", "Transparent"], defaultValue: "Light", label: "Theme" },
+    { name: "accent", type: "color", label: "Accent Color" },
+    { name: "fontSize", type: "dropdown", values: [13, 14, 15, 16, 18, 20], defaultValue: 15, label: "Base Font Size" },
+    { name: "contentWidth", type: "dropdown", values: ["Full width", "Narrow (640px)", "Medium (760px)", "Wide (960px)"], defaultValue: "Full width", label: "Content Width" },
+    { name: "padding", type: "dropdown", values: ["None", "Compact", "Comfortable", "Spacious"], defaultValue: "Comfortable", label: "Padding" },
+    { name: "textAlign", type: "radio", values: ["Left", "Center"], singleLine: true, defaultValue: "Left",
+      label: "Content Alignment", description: "Centers the content block when a fixed content width is set." }
+  ]);
+
+  var unsubData = null;
+  var unsubVar = null;
+  var lastVarId = null;
+  var lastSourceId = null;
+  var lastColumnId = null;
+
+  var state = { varText: "", colText: "", cfg: {} };
+
+  function paint() {
+    var cfg = state.cfg || {};
+    applyStyle(cfg);
+
+    if (cfg.mdVariable && state.varText.trim()) return renderMarkdown(state.varText);
+    if (cfg.source && cfg.mdColumn && state.colText.trim()) return renderMarkdown(state.colText);
+
+    // Nothing bound at all: show the sample so the element never looks broken.
+    if (!cfg.mdVariable && !(cfg.source && cfg.mdColumn)) return renderMarkdown(SAMPLE);
+
+    if (cfg.mdVariable) return renderHint("The bound text control is empty. Type markdown into it to render content here.");
+    return renderHint("The bound column returned no text.");
+  }
+
+  client.config.subscribe(function (cfg) {
+    state.cfg = cfg || {};
+
+    // --- variable subscription ---
+    if (cfg.mdVariable !== lastVarId) {
+      if (unsubVar) { try { unsubVar(); } catch (e) {} unsubVar = null; }
+      lastVarId = cfg.mdVariable;
+      state.varText = "";
+      if (cfg.mdVariable) {
+        try {
+          unsubVar = client.subscribeToWorkbookVariable(cfg.mdVariable, function (val) {
+            state.varText = coerceText(val);
+            paint();
+          });
+        } catch (e) {}
+        // Seed from the current snapshot in case the subscription only fires on change.
+        try {
+          var snap = client.getVariable(cfg.mdVariable);
+          if (snap && typeof snap.then === "function") {
+            snap.then(function (v) { if (!state.varText) { state.varText = coerceText(v); paint(); } });
+          } else if (snap !== undefined) {
+            state.varText = coerceText(snap);
+          }
+        } catch (e) {}
+      }
+    }
+
+    // --- element data subscription ---
+    if (cfg.source !== lastSourceId || cfg.mdColumn !== lastColumnId) {
+      if (unsubData) { try { unsubData(); } catch (e) {} unsubData = null; }
+      lastSourceId = cfg.source;
+      lastColumnId = cfg.mdColumn;
+      state.colText = "";
+      if (cfg.source && cfg.mdColumn) {
+        unsubData = client.elements.subscribeToElementData(cfg.source, function (data) {
+          var col = (data && data[state.cfg.mdColumn]) || [];
+          var values = [];
+          for (var i = 0; i < col.length; i++) {
+            var t = coerceText(col[i]);
+            if (t) values.push(t);
+          }
+          state.colText = state.cfg.joinRows ? values.join("\n\n") : (values[0] || "");
+          paint();
+        });
+      }
+    }
+
+    paint();
+  });
+})();
+</script>
+</body>
+</html>
