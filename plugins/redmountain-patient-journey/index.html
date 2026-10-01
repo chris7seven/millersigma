@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Patient Journey — Red Mountain Sigma Plugin</title>
+<!-- The plugin UMD needs a global React (createContext at load) and exposes
+     window.SigmaPlugin; pinned versions, loaded in order. -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/@sigmacomputing/plugin@1.2.0/dist/umd/sigmacomputing-plugin.umd.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,Inter,Segoe UI,Roboto,Arial,sans-serif;
+       background:#FFFFFF;color:#233E4F;overflow:hidden}
+  #wrap{height:100%;width:100%;display:flex;flex-direction:column;padding:10px 16px 8px;gap:8px}
+  #top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex:0 0 auto;flex-wrap:wrap}
+  #ttl{font-size:12px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#B00013}
+  #ttl span{color:#7A8794;font-weight:600;letter-spacing:.04em}
+  #pills{display:flex;gap:6px;flex-wrap:wrap}
+  .pill{font-size:11px;font-weight:600;padding:4px 10px;border-radius:999px;border:1px solid #E7E2DD;
+        background:#FAF8F6;color:#233E4F;cursor:pointer;user-select:none;white-space:nowrap}
+  .pill:hover{border-color:#B00013}
+  .pill.on{background:#B00013;border-color:#B00013;color:#FFFFFF}
+  #stage{flex:1;min-height:0;position:relative}
+  svg{width:100%;height:100%;display:block}
+  #foot{flex:0 0 auto;display:flex;justify-content:space-between;gap:16px;font-size:11px;color:#5C6B78}
+  #foot b{color:#233E4F}
+  #leak b{color:#B00013}
+  #tip{position:fixed;pointer-events:none;background:#233E4F;border-radius:8px;padding:8px 10px;
+       font-size:11px;color:#F4F1EE;opacity:0;transition:opacity .1s;z-index:10;white-space:nowrap;
+       box-shadow:0 8px 24px rgba(0,0,0,.25)}
+  #tip b{color:#FFFFFF}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="top">
+    <div id="ttl">Patient journey <span>· lead to month 6 · trailing 12 months</span></div>
+    <div id="pills"></div>
+  </div>
+  <div id="stage"><svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg></div>
+  <div id="foot">
+    <div id="leak">Largest leak <b>—</b></div>
+    <div id="ret">Lead → month-6 retention <b>—</b></div>
+  </div>
+</div>
+<div id="tip"></div>
+<script>
+(function(){
+  var sdk=window.SigmaPlugin||(window.sigmaComputing&&window.sigmaComputing.plugin)||null;
+  var client=sdk&&sdk.client&&sdk.client.config?sdk.client:null;
+
+  var defs=[
+    {name:'source',type:'element',label:'Journey table'},
+    {name:'program',type:'column',source:'source',label:'Program'},
+    {name:'stage',type:'column',source:'source',label:'Stage'},
+    {name:'order',type:'column',source:'source',allowedTypes:['number','integer'],label:'Stage order'},
+    {name:'patients',type:'column',source:'source',allowedTypes:['number','integer'],label:'Patients'}
+  ];
+  if(client){try{client.config.configureEditorPanel(defs);}catch(e){console.warn('editor panel',e);}}
+
+  // what is lost between stage i and i+1
+  var LEAKS=['never booked a consult','no-shows & late cancels','did not enroll',
+             'cancelled by month 3','cancelled by month 6'];
+  var RAMP=['#47070C','#831519','#B00013','#C8323A','#DB6168','#E9979A'];
+
+  var NS='http://www.w3.org/2000/svg';
+  function el(n,a,t){var e=document.createElementNS(NS,n);for(var k in a)e.setAttribute(k,a[k]);if(t!=null)e.textContent=t;return e;}
+  function num(v){return Math.round(Number(v)||0).toLocaleString();}
+  function pct(v){return (v*100).toFixed(v<0.1?1:0)+'%';}
+
+  var S={rows:null,sel:'All programs',cfg:null,unsub:null};
+
+  function synth(){
+    var P=[['GLP-1 Weight Loss',24800,[.44,.81,.72,.74,.71]],['RM3 Program',7400,[.38,.78,.58,.66,.60]],
+           ["Men's Health (TRT)",9600,[.47,.86,.76,.84,.82]],["Women's Hormones",6200,[.49,.87,.74,.83,.80]],
+           ['Med Spa & Aesthetics',5300,[.52,.83,.61,.55,.52]]];
+    var st=['Leads','Consult booked','Consult attended','Enrolled','Active at month 3','Active at month 6'];
+    var out=[];
+    P.forEach(function(p){var n=p[1];out.push({program:p[0],stage:st[0],order:1,patients:n});
+      p[2].forEach(function(r,i){n=Math.round(n*r);out.push({program:p[0],stage:st[i+1],order:i+2,patients:n});});});
+    return out;
+  }
+
+  function fromSigma(d,c){
+    if(!d||!c||!c.program||!c.stage||!c.order||!c.patients) return null;
+    var P=d[c.program],St=d[c.stage],O=d[c.order],N=d[c.patients];
+    if(!P||!St||!O||!N||!P.length) return null;
+    var out=[];
+    for(var i=0;i<P.length;i++) out.push({program:String(P[i]),stage:String(St[i]),order:Number(O[i]),patients:Number(N[i])||0});
+    return out;
+  }
+
+  function aggregate(rows,sel){
+    var m={};
+    rows.forEach(function(r){
+      if(sel!=='All programs'&&r.program!==sel) return;
+      if(!m[r.order]) m[r.order]={order:r.order,stage:r.stage,patients:0};
+      m[r.order].patients+=r.patients;
+    });
+    return Object.keys(m).map(function(k){return m[k];}).sort(function(a,b){return a.order-b.order;});
+  }
+
+  function pills(rows){
+    var names=['All programs'];
+    rows.forEach(function(r){if(names.indexOf(r.program)<0) names.push(r.program);});
+    if(names.indexOf(S.sel)<0) S.sel='All programs';
+    var box=document.getElementById('pills');box.innerHTML='';
+    names.forEach(function(n){
+      var b=document.createElement('div');b.className='pill'+(n===S.sel?' on':'');b.textContent=n;
+      b.onclick=function(){S.sel=n;render();};box.appendChild(b);
+    });
+  }
+
+  var tip=document.getElementById('tip');
+  function showTip(ev,html){tip.innerHTML=html;tip.style.opacity=1;
+    var x=Math.min(ev.clientX+14,window.innerWidth-tip.offsetWidth-6);
+    tip.style.left=x+'px';tip.style.top=Math.max(ev.clientY-46,4)+'px';}
+  function hideTip(){tip.style.opacity=0;}
+
+  function draw(st){
+    var svg=document.getElementById('svg');while(svg.firstChild) svg.removeChild(svg.firstChild);
+    var box=document.getElementById('stage').getBoundingClientRect();
+    var W=Math.max(box.width,320),H=Math.max(box.height,160);
+    svg.setAttribute('viewBox','0 0 '+W+' '+H);
+    if(!st.length) return;
+    var n=st.length,top0=st[0].patients||1;
+    var labH=34,headH=34,gap=Math.max(W*0.07,46);
+    var colW=(W-gap*(n-1))/n,barH=H-labH-headH;
+    var defs=el('defs',{});svg.appendChild(defs);
+    var leakIdx=-1,leakRate=-1;
+    st.forEach(function(s,i){
+      var x=i*(colW+gap),h=Math.max(barH*(s.patients/top0),3),y=headH+barH-h;
+      // track behind the bar so every column reads at the same baseline
+      svg.appendChild(el('rect',{x:x,y:headH,width:colW,height:barH,rx:6,fill:'#F6F3F0'}));
+      var bar=el('rect',{x:x,y:y,width:colW,height:h,rx:6,fill:RAMP[Math.min(i,RAMP.length-1)]});
+      bar.style.cursor='default';
+      (function(s,i){
+        bar.addEventListener('mousemove',function(ev){
+          showTip(ev,'<b>'+s.stage+'</b><br/>'+num(s.patients)+' patients · '+pct(s.patients/top0)+' of leads');});
+        bar.addEventListener('mouseleave',hideTip);
+      })(s,i);
+      svg.appendChild(bar);
+      svg.appendChild(el('text',{x:x+colW/2,y:y-8,'text-anchor':'middle','font-size':Math.min(17,colW/5.2),
+        'font-weight':800,fill:'#233E4F'},num(s.patients)));
+      svg.appendChild(el('text',{x:x+colW/2,y:H-labH+15,'text-anchor':'middle','font-size':11.5,
+        'font-weight':700,fill:'#233E4F'},s.stage));
+      svg.appendChild(el('text',{x:x+colW/2,y:H-labH+29,'text-anchor':'middle','font-size':10.5,
+        fill:'#7A8794'},pct(s.patients/top0)+' of leads'));
+      if(i<n-1){
+        var nx=st[i+1],conv=s.patients?nx.patients/s.patients:0,lost=s.patients-nx.patients;
+        if(i>0&&1-conv>leakRate){leakRate=1-conv;leakIdx=i;}
+        var cx=x+colW+gap/2,cy=headH+barH*0.42;
+        svg.appendChild(el('path',{d:'M'+(cx-9)+' '+(cy-30)+' l9 7 l-9 7',fill:'none',stroke:'#C9C2BB','stroke-width':1.6}));
+        var chip=el('rect',{x:cx-gap/2+4,y:cy-12,width:gap-8,height:22,rx:11,fill:'#FFFFFF',stroke:'#E7E2DD'});
+        svg.appendChild(chip);
+        svg.appendChild(el('text',{x:cx,y:cy+3.5,'text-anchor':'middle','font-size':11,'font-weight':800,
+          fill:conv<0.6?'#B00013':'#233E4F'},pct(conv)));
+        svg.appendChild(el('text',{x:cx,y:cy+28,'text-anchor':'middle','font-size':10,'font-weight':700,
+          fill:'#B00013'},'−'+num(lost)));
+        var words=LEAKS[i]||'lost';
+        var parts=words.length>14?[words.slice(0,words.lastIndexOf(' ',Math.ceil(words.length/2)+2)),
+                                   words.slice(words.lastIndexOf(' ',Math.ceil(words.length/2)+2)+1)]:[words];
+        parts.forEach(function(t,k){
+          svg.appendChild(el('text',{x:cx,y:cy+41+k*11,'text-anchor':'middle','font-size':9.5,fill:'#7A8794'},t));
+        });
+      }
+    });
+    var lk=document.getElementById('leak'),rt=document.getElementById('ret');
+    if(leakIdx>=0) lk.innerHTML='Largest post-consult leak <b>'+st[leakIdx].stage+' → '+st[leakIdx+1].stage+
+      '</b> · '+pct(leakRate)+' '+(LEAKS[leakIdx]||'lost');
+    rt.innerHTML='Lead → month-6 retention <b>'+pct(st[n-1].patients/top0)+'</b> · enrolled → month 6 <b>'+
+      (st.length>5&&st[3].patients?pct(st[5].patients/st[3].patients):'—')+'</b>';
+  }
+
+  function render(){
+    try{
+      var rows=S.rows&&S.rows.length?S.rows:synth();
+      pills(rows);draw(aggregate(rows,S.sel));
+    }catch(e){console.warn('render',e);}
+  }
+
+  render();   // synthetic first paint so the element is never blank
+  if(client){
+    try{
+      client.config.subscribe(function(cfg){
+        S.cfg=cfg;
+        if(S.unsub){S.unsub();S.unsub=null;}
+        if(cfg&&cfg.source){
+          S.unsub=client.elements.subscribeToElementData(cfg.source,function(d){
+            S.rows=fromSigma(d,S.cfg);render();});
+        } else {S.rows=null;render();}
+      });
+    }catch(e){console.warn('subscribe',e);}
+  }
+  // ResizeObserver, not window resize — Sigma resizes the element, not the page.
+  if(window.ResizeObserver) new ResizeObserver(function(){render();}).observe(document.getElementById('stage'));
+})();
+</script>
+</body>
+</html>
